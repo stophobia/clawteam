@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import threading
 import time
+import urllib.request
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from clawteam.board.collector import BoardCollector
 
@@ -65,8 +67,61 @@ class BoardHandler(BaseHTTPRequestHandler):
                 self.send_error(400, "Team name required")
                 return
             self._serve_sse(team_name)
+        elif path.startswith("/api/proxy"):
+            query = parse_qs(urlparse(self.path).query)
+            target_url = query.get("url", [""])[0]
+            if not target_url:
+                self.send_error(400, "URL required")
+                return
+            try:
+                # If github URL, convert to api.github.com/repos/.../readme
+                if "github.com" in target_url and "raw.githubusercontent.com" not in target_url:
+                    parsed = urlparse(target_url)
+                    parts = [p for p in parsed.path.split("/") if p]
+                    if len(parts) == 2:
+                        api_url = f"https://api.github.com/repos/{parts[0]}/{parts[1]}/readme"
+                        req = urllib.request.Request(api_url, headers={"User-Agent": "ClawTeam-Server"})
+                        with urllib.request.urlopen(req) as resp:
+                            data = json.loads(resp.read().decode())
+                            target_url = data.get("download_url", target_url)
+                    else:
+                        target_url = target_url.replace("github.com", "raw.githubusercontent.com").replace("/blob/", "/")
+
+                req = urllib.request.Request(target_url, headers={"User-Agent": "ClawTeam-Server"})
+                with urllib.request.urlopen(req) as resp:
+                    content = resp.read()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/plain; charset=utf-8")
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(content)
+            except Exception as e:
+                self.send_error(500, str(e))
         else:
             self.send_error(404)
+
+    def do_POST(self):
+        path = self.path.split("?")[0]
+        if path.startswith("/api/team/") and path.endswith("/task"):
+            parts = path.strip("/").split("/")
+            if len(parts) == 4 and parts[3] == "task":
+                team_name = parts[2]
+                content_length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(content_length).decode("utf-8")
+                try:
+                    payload = json.loads(body)
+                    from clawteam.team.tasks import TaskStore
+                    store = TaskStore(team_name)
+                    task = store.create(
+                        subject=payload.get("subject", ""),
+                        description=payload.get("description", ""),
+                        owner=payload.get("owner", "")
+                    )
+                    self._serve_json({"status": "ok", "task_id": task.id})
+                except Exception as e:
+                    self.send_error(400, str(e))
+                return
+        self.send_error(404)
 
     def _serve_static(self, filename: str, content_type: str):
         filepath = _STATIC_DIR / filename
