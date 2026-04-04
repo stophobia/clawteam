@@ -257,8 +257,10 @@ class TestContractExecutor:
         assert [task.owner for task in tasks] == ["exec-1", "exec-2", "exec-1"]
 
         stored = TaskStore("demo").list_tasks()
-        assert [task.owner for task in stored] == ["exec-1", "exec-2", "exec-1"]
-        assert stored[0].metadata["assigned_to"] == ["exec-1"]
+        owners_by_subject = {task.subject: task.owner for task in stored}
+        assert owners_by_subject == {"A": "exec-1", "B": "exec-2", "C": "exec-1"}
+        metadata_by_subject = {task.subject: task.metadata for task in stored}
+        assert metadata_by_subject["A"]["assigned_to"] == ["exec-1"]
 
     def test_create_tasks_from_contracts_prefers_contract_assignee(self, tmp_path, monkeypatch):
         from clawteam.harness.contract_executor import ContractExecutor

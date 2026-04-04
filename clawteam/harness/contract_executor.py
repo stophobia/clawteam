@@ -39,7 +39,7 @@ class ContractExecutor:
 
     def load_contracts(self) -> list[SprintContract]:
         """Load contracts from the artifact store."""
-        contracts = []
+        contracts: list[tuple[str, SprintContract]] = []
         artifacts = self._orch.artifacts.list_artifacts()
         for art in artifacts:
             if "sprint-contract" in art["name"] and art["name"].endswith(".json"):
@@ -47,10 +47,11 @@ class ContractExecutor:
                 if content:
                     try:
                         data = json.loads(content)
-                        contracts.append(SprintContract.model_validate(data))
+                        contracts.append((art["name"], SprintContract.model_validate(data)))
                     except Exception:
                         pass
-        return sorted(contracts, key=lambda c: (c.wave, c.id))
+        contracts.sort(key=lambda item: (item[1].wave, item[0], item[1].id))
+        return [contract for _, contract in contracts]
 
     def create_tasks_from_contracts(self, agent_names: list[str] | None = None) -> list:
         """Convert contracts to TaskStore tasks with wave dependencies."""
